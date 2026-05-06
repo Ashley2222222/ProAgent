@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>政策爬取日报 - 2026-05-06</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .header h1 { font-size: 24px; margin-bottom: 10px; }
+        .overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            padding: 30px;
+            background: #f8f9fa;
+        }
+        .overview-card {
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        }
+        .overview-card .number {
+            font-size: 36px;
+            font-weight: bold;
+            color: #4facfe;
+            margin-bottom: 5px;
+        }
+        .section { padding: 30px; border-bottom: 1px solid #eee; }
+        .section h2 { font-size: 18px; color: #333; margin-bottom: 20px; }
+        .department-table { width: 100%; border-collapse: collapse; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .department-table th { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; padding: 12px; text-align: left; }
+        .department-table td { padding: 12px; border-bottom: 1px solid #eee; }
+        .department-tag { display: inline-block; padding: 4px 12px; background: #e3f2fd; color: #1976d2; border-radius: 12px; font-size: 12px; }
+        .keyword-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        .keyword-tag { display: inline-block; padding: 6px 14px; background: #f3e5f5; color: #7b1fa2; border-radius: 16px; font-size: 12px; }
+        .policy-table-wrapper { margin-top: 20px; overflow-x: auto; border-radius: 10px; border: 1px solid #e6e9f2; }
+        .policy-table { width: 100%; border-collapse: collapse; min-width: 980px; }
+        .policy-table th { background: #f2f4f8; color: #333; font-weight: 700; font-size: 13px; padding: 12px; text-align: left; border-bottom: 1px solid #e6e9f2; }
+        .policy-table td { padding: 12px; border-bottom: 1px solid #eef0f6; vertical-align: top; font-size: 13px; color: #333; }
+        .policy-table tr:hover td { background: #fafbff; }
+        .policy-title-link { color: #2563eb; text-decoration: none; font-weight: 600; }
+        .policy-source-tag { display: inline-block; padding: 4px 10px; background: #e8f5e8; color: #2e7d32; border-radius: 12px; font-size: 12px; white-space: nowrap; }
+        .policy-date { font-size: 12px; color: #666; white-space: nowrap; }
+        .policy-keywords { display: flex; flex-wrap: wrap; gap: 6px; }
+        .action-btn { display: inline-block; padding: 6px 12px; border-radius: 10px; background: #2563eb; color: #fff; text-decoration: none; font-weight: 600; font-size: 12px; white-space: nowrap; }
+        .action-btn:hover { filter: brightness(0.95); }
+        .pagination { display: flex; justify-content: center; align-items: center; margin-top: 20px; }
+        .pagination a { color: #4facfe; padding: 8px 16px; text-decoration: none; border: 1px solid #ddd; margin: 0 4px; border-radius: 4px; }
+        .pagination a.active { background-color: #4facfe; color: white; border: 1px solid #4facfe; }
+        .footer { text-align: center; padding: 30px; background: #f8f9fa; font-size: 12px; color: #666; }
+        a { color: #4facfe; text-decoration: none; }
+        .print-btn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        .word-btn {
+            position: fixed;
+            top: 20px;
+            right: 100px;
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #2b5876 0%, #4e4376 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body>
+    <button class="word-btn" onclick="exportToWord()">导出Word</button>
+    <button class="print-btn" onclick="window.print()">打印</button>
+    
+    <div class="container">
+        <div class="header">
+            <h1>政策爬取日报</h1>
+            <p>生成时间: 2026-05-06 13:55:19</p>
+        </div>
+        
+        <div class="overview">
+            <div class="overview-card">
+                <div class="number">2</div>
+                <div class="label">总抓取数</div>
+            </div>
+            <div class="overview-card">
+                <div class="number">2</div>
+                <div class="label">涉及部门</div>
+            </div>
+            <div class="overview-card">
+                <div class="number">3</div>
+                <div class="label">关键词种类</div>
+            </div>
+            <div class="overview-card">
+                <div class="number">日报</div>
+                <div class="label">报告类型</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>部门分布</h2>
+            <table class="department-table">
+                <thead><tr><th>部门</th><th>数量</th><th>占比</th></tr></thead>
+                <tbody>
+                    
+                    <tr>
+                        <td><span class="department-tag">广东省科学技术厅</span></td>
+                        <td>1</td>
+                        <td>50.0%</td>
+                    </tr>
+                    <tr>
+                        <td><span class="department-tag">广东省工业和信息化厅</span></td>
+                        <td>1</td>
+                        <td>50.0%</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>关键词统计</h2>
+            <div class="keyword-stats">
+                <span class="keyword-tag">申报 (1)</span><span class="keyword-tag">基金项目 (1)</span><span class="keyword-tag">工业互联网 (1)</span>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>详细政策列表</h2>
+            <div class="policy-table-wrapper">
+                <table class="policy-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 28%;">标题</th>
+                            <th style="width: 12%;">来源</th>
+                            <th style="width: 10%;">发布日期</th>
+                            <th style="width: 14%;">关键词</th>
+                            <th style="width: 26%;">AI分析摘要</th>
+                            <th style="width: 5%;">查看原文</th>
+                            <th style="width: 5%;">建议书</th>
+                        </tr>
+                    </thead>
+                    <tbody id="policy-tbody">
+                        
+            <tr>
+                <td><a class="policy-title-link" href="http://gdstc.gd.gov.cn/zwgk_n/tzgg/content/post_4891688.html" target="_blank">1. 广东省基础与应用基础研究基金委员会关于组织申报2026年广东省基础与应用基础研究基金项目的通知</a></td>
+                <td><span class="policy-source-tag">广东省科学技术厅</span></td>
+                <td><span class="policy-date">2026-04-30</span></td>
+                <td><div class="policy-keywords"><span class="keyword-tag">申报</span><span class="keyword-tag">基金项目</span></div></td>
+                <td>【项目】2026年广东省基础与应用基础研究基金项目<br>【截止】2026年5月15日~6月10日17:00（2027年度省自然科学基金）；2026年5月25日~6月10日17:00（2<br>【资助】未明确<br>【结论】符合课题申报要求，需注意申报时间、申报主体资格、各项申报条件及流程等。</td>
+                <td><a class="action-btn" href="http://gdstc.gd.gov.cn/zwgk_n/tzgg/content/post_4891688.html" target="_blank">查看原文</a></td>
+                <td><a class="action-btn" href="proposals/%E9%A1%B9%E7%9B%AE%E7%94%B3%E6%8A%A5%E5%BB%BA%E8%AE%AE%E4%B9%A6_%E5%B9%BF%E4%B8%9C%E7%9C%81%E5%9F%BA%E7%A1%80%E4%B8%8E%E5%BA%94%E7%94%A8%E5%9F%BA%E7%A1%80%E7%A0%94%E7%A9%B6%E5%9F%BA%E9%87%91%E5%A7%94%E5%91%98%E4%BC%9A%E5%85%B3%E4%BA%8E%E7%BB%84%E7%BB%87%E7%94%B3%E6%8A%A52026%E5%B9%B4%E5%B9%BF%E4%B8%9C%E7%9C%81%E5%9F%BA%E7%A1%80%E4%B8%8E%E5%BA%94%E7%94%A8%E5%9F%BA%E7%A1%80%E7%A0%94%E7%A9%B6%E5%9F%BA%E9%87%91%E9%A1%B9%E7%9B%AE%E7%9A%84%E9%80%9A%E7%9F%A5.md" target="_blank">下载建议书</a></td>
+            </tr>
+            
+            <tr>
+                <td><a class="policy-title-link" href="https://gdii.gd.gov.cn/zwgk/tzgg1011/content/post_4889169.html" target="_blank">2. 广东省工业和信息化厅关于公开遴选2026年广东省无线电管理主题普法宣贯活动项目服务机构的通告</a></td>
+                <td><span class="policy-source-tag">广东省工业和信息化厅</span></td>
+                <td><span class="policy-date">2026-04-30</span></td>
+                <td><div class="policy-keywords"><span class="keyword-tag">工业互联网</span></div></td>
+                <td>【项目】2026年广东省无线电管理主题普法宣贯活动<br>【截止】2026年5月6日14时30分<br>【资助】含税不超过人民币29万元<br>【结论】符合课题申报，有明确的项目名称、申报截止时间、申报主体、资助类型、核心申报条件、征集内容、申报流程和联系方式</td>
+                <td><a class="action-btn" href="https://gdii.gd.gov.cn/zwgk/tzgg1011/content/post_4889169.html" target="_blank">查看原文</a></td>
+                <td><a class="action-btn" href="proposals/%E9%A1%B9%E7%9B%AE%E7%94%B3%E6%8A%A5%E5%BB%BA%E8%AE%AE%E4%B9%A6_%E5%B9%BF%E4%B8%9C%E7%9C%81%E5%B7%A5%E4%B8%9A%E5%92%8C%E4%BF%A1%E6%81%AF%E5%8C%96%E5%8E%85%E5%85%B3%E4%BA%8E%E5%85%AC%E5%BC%80%E9%81%B4%E9%80%892026%E5%B9%B4%E5%B9%BF%E4%B8%9C%E7%9C%81%E6%97%A0%E7%BA%BF%E7%94%B5%E7%AE%A1%E7%90%86%E4%B8%BB%E9%A2%98%E6%99%AE%E6%B3%95%E5%AE%A3%E8%B4%AF%E6%B4%BB%E5%8A%A8%E9%A1%B9%E7%9B%AE%E6%9C%8D%E5%8A%A1%E6%9C%BA%E6%9E%84%E7%9A%84%E9%80%9A%E5%91%8A.md" target="_blank">下载建议书</a></td>
+            </tr>
+            
+                    </tbody>
+                </table>
+            </div>
+            <div class="pagination" id="pagination"></div>
+        </div>
+        
+        <div class="footer">
+            <p>本报告由科研课题申报智能体自动生成 | 数据来源：政府官方网站</p>
+            <p>生成时间：2026-05-06 13:55:19</p>
+            <p>✓ 兼容: iOS 14+ | iPadOS 14+ | Safari | Chrome for iOS</p>
+            <p>✓ 同时兼容: macOS | Safari for Mac | Chrome for Mac</p>
+        </div>
+    </div>
+
+    <script>
+        const itemsPerPage = 15;
+        const policyTbody = document.getElementById('policy-tbody');
+        const policyItems = policyTbody ? Array.from(policyTbody.querySelectorAll('tr')) : [];
+        const paginationContainer = document.getElementById('pagination');
+        const numPages = Math.ceil(policyItems.length / itemsPerPage);
+        let currentPage = 1;
+
+        function showPage(page) {
+            if (numPages <= 0) {
+                if (paginationContainer) paginationContainer.innerHTML = '';
+                return;
+            }
+            if (page < 1) page = 1;
+            if (page > numPages) page = numPages;
+            currentPage = page;
+            const start = (page - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+
+            policyItems.forEach((item, index) => {
+                item.style.display = (index >= start && index < end) ? 'table-row' : 'none';
+            });
+
+            renderPagination();
+        }
+
+        function renderPagination() {
+            if (!paginationContainer) return;
+            if (numPages <= 1) {
+                paginationContainer.innerHTML = '';
+                return;
+            }
+            let html = '';
+            if (currentPage > 1) {
+                html += `<a href="#" onclick="showPage(${currentPage - 1})">上一页</a>`;
+            }
+
+            for (let i = 1; i <= numPages; i++) {
+                html += `<a href="#" class="${currentPage === i ? 'active' : ''}" onclick="showPage(${i})">${i}</a>`;
+            }
+
+            if (currentPage < numPages) {
+                html += `<a href="#" onclick="showPage(${currentPage + 1})">下一页</a>`;
+            }
+
+            paginationContainer.innerHTML = html;
+        }
+
+        showPage(1);
+
+        function exportToWord() {
+            var content = document.documentElement.outerHTML;
+            var blob = new Blob(['\ufeff', content], {
+                type: 'application/msword'
+            });
+            var url = URL.createObjectURL(blob);
+            var link = document.createElement('a');
+            link.href = url;
+            link.download = '科研课题申报日报.doc';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+
+</body>
+</html>

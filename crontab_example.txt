@@ -1,0 +1,20 @@
+# Linux / macOS 定时任务 (Crontab) 示例
+
+# 1. 打开终端并输入命令编辑定时任务:
+# crontab -e
+
+# 2. 在打开的文件中添加以下行（请根据实际路径修改）:
+
+# 每天早上 8:30 自动执行政策爬取脚本
+# ==============================================================
+30 8 * * * cd /path/to/your/ProAgent && /usr/bin/python3 main.py >> /path/to/your/ProAgent/data/cron.log 2>&1
+# ==============================================================
+
+# 说明：
+# - `30 8 * * *` 表示每天 8点30分 执行
+# - `cd /path/to/your/ProAgent` 切换到脚本所在目录（必须绝对路径）
+# - `/usr/bin/python3` 是 Python 解释器的绝对路径（可通过 `which python3` 命令获取）
+# - `>> /path/to/your/ProAgent/data/cron.log 2>&1` 将日志输出到文件以便排查问题
+
+# 如果使用虚拟环境（venv / conda / pyenv），需要修改执行路径：
+# 30 8 * * * cd /path/to/your/ProAgent && /path/to/your/venv/bin/python main.py >> /path/to/your/ProAgent/data/cron.log 2>&1
