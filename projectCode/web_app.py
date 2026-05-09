@@ -125,7 +125,6 @@ def _run_pipeline(job_id: str, options: dict) -> None:
         JOBS[job_id]["options"] = options
 
     enable_ai = _parse_bool(options.get("enable_ai"))
-    enable_rag = _parse_bool(options.get("enable_rag"))
     enable_html = _parse_bool(options.get("enable_html"))
     enable_wechat_markdown = _parse_bool(
         options.get("enable_wechat_markdown", options.get("enable_wechat"))
@@ -145,7 +144,7 @@ def _run_pipeline(job_id: str, options: dict) -> None:
 
     _log(
         job_id,
-        f"开始执行：网站 {len(selected_sites)} 个，AI分析={enable_ai}，RAG={enable_rag}，HTML={enable_html}，企业微信摘要={enable_wechat_markdown}，企业微信文件={enable_wechat_file}",
+        f"开始执行：网站 {len(selected_sites)} 个，AI分析={enable_ai}，HTML={enable_html}，企业微信摘要={enable_wechat_markdown}，企业微信文件={enable_wechat_file}",
     )
     analyzer = ResearchAIAnalyzer() if enable_ai else None
 
@@ -192,7 +191,10 @@ def _run_pipeline(job_id: str, options: dict) -> None:
                 seen.add(key)
                 deduped.append(n)
             if len(deduped) != len(all_notices):
-                _log(job_id, f"去重：保留 {len(deduped)} 条（剔除 {len(all_notices) - len(deduped)} 条重复）")
+                _log(
+                    job_id,
+                    f"去重：保留 {len(deduped)} 条（剔除 {len(all_notices) - len(deduped)} 条重复）",
+                )
             all_notices = deduped
 
             for idx, notice in enumerate(all_notices, 1):
@@ -244,42 +246,25 @@ def _run_pipeline(job_id: str, options: dict) -> None:
         rag_path = None
         html_path = None
         html_filename = None
-        materials_results = None
-        if enable_rag and all_results:
-            _log(job_id, "开始RAG材料提取")
+        materials_results = []
+        if enable_ai and all_results:
+            _log(job_id, "开始材料提取（基于AI分析结果）")
             materials_results = analyze_materials_batch(all_results)
             rag_path = os.path.join(PROJECT_ROOT, OUTPUT_DIR, RAG_RESULT_FILENAME)
             with open(rag_path, "w", encoding="utf-8") as f:
                 json.dump(materials_results, f, ensure_ascii=False, indent=2)
-            _log(job_id, f"RAG结果已保存:{rag_path}")
-            if materials_results:
-                results_for_html = materials_results
-            else:
-                results_for_html = all_results  # 回退到原始爬取结果
+            _log(job_id, f"材料提取结果已保存:{rag_path}")
 
         if enable_proposal and all_results:
             proposals_dir = os.path.join(OUTPUT_DIR, "proposals")
-            if enable_rag and materials_results:
-                _log(job_id, "开始生成申报建议书（优先使用RAG结果）")
+            if enable_ai and materials_results:
+                _log(job_id, "开始生成申报建议书（基于材料提取结果）")
                 count = generate_proposals_batch(
                     materials_results, output_dir=proposals_dir
                 )
-                if count <= 0:
-                    _log(job_id, "RAG建议书生成数量为0，回退为基于原始爬取结果生成")
-                    from proposal_generator import generate_proposals_from_raw
-
-                    count = generate_proposals_from_raw(
-                        all_results, output_dir=proposals_dir
-                    )
                 _log(job_id, f"建议书生成完成：{count} 份，目录：{proposals_dir}")
             else:
-                _log(job_id, "开始生成申报建议书（基于原始爬取结果）")
-                from proposal_generator import generate_proposals_from_raw
-
-                count = generate_proposals_from_raw(
-                    all_results, output_dir=proposals_dir
-                )
-                _log(job_id, f"建议书生成完成：{count} 份，目录：{proposals_dir}")
+                _log(job_id, "建议书生成已跳过：需先启用AI分析并产生材料提取结果")
 
         if enable_html:
             # 决定用于显示的数据源：如果启用了AI分析，优先使用 all_results（含分析结果）
@@ -397,11 +382,10 @@ def _html_page() -> str:
           </div>
           <div style="font-weight:700;margin:14px 0 10px;">选项</div>
           <div class="checks">
-            <label><input id="enable_ai" type="checkbox"> AI分析</label>
-            <label><input id="enable_rag" type="checkbox" checked> RAG提取</label>
+            <label><input id="enable_ai" type="checkbox" checked> AI分析</label>
             <label><input id="enable_html" type="checkbox" checked> 生成HTML</label>
             <label><input id="enable_wechat_markdown" type="checkbox"> 推送摘要</label>
-            <label><input id="enable_wechat_file" type="checkbox"> 推送HTML文件</label>
+            <label><input id="enable_wechat_file" type="checkbox" checked> 推送HTML文件</label>
             <label><input id="enable_proposal" type="checkbox" checked> 生成建议书</label>
           </div>
         </div>
@@ -452,7 +436,6 @@ def _html_page() -> str:
         end_date: document.getElementById('end_date').value,
         sites,
         enable_ai: document.getElementById('enable_ai').checked,
-        enable_rag: document.getElementById('enable_rag').checked,
         enable_html: document.getElementById('enable_html').checked,
         enable_wechat_markdown: document.getElementById('enable_wechat_markdown').checked,
         enable_wechat_file: document.getElementById('enable_wechat_file').checked,

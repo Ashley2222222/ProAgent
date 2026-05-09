@@ -10,21 +10,8 @@
 # True: 启用AI分析（需要配置API Key），False: 仅爬取和打印信息
 ENABLE_AI_ANALYSIS = True
 
-# 是否启用RAG材料提取分析
-ENABLE_RAG_ANALYSIS = True
-
 # 是否自动为高价值通知生成《项目申报建议书》(Markdown初稿)
 ENABLE_AUTO_PROPOSAL = True
-
-# AI分析过滤选项
-# True: 只对符合要求的通知进行AI分析（推荐）
-# False: 对所有通知进行AI分析（消耗更多token）
-AI_ONLY_ANALYZE_VALID = True
-
-# 说明：
-# 符合要求的通知 = 包含申报类关键词 且 不包含排除关键词
-# - 包含关键词：申报、智慧、人工智能、征集、申请、推荐、遴选、课题、项目、基金、指南、专项、计划
-# - 排除关键词：公示、结果、批复、核准、批准、备案、奖励、验收、调研、培训、会议等
 
 # ========== 爬取配置 ==========
 

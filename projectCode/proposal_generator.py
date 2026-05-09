@@ -3,12 +3,38 @@ import os
 import json
 from typing import Dict, Any, List
 from dotenv import load_dotenv
-from rag_analyzer import _retry_request
 from config import AI_MODEL
+import time
+import requests
 
 load_dotenv()
 API_KEY = os.getenv("AI_API_KEY")
 TEST_MODE = False  # 测试模式：返回固定模板，不调用 AI
+
+
+def _retry_request(
+    url: str, headers: dict, json_data: dict, max_retries: int = 2
+) -> dict:
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(
+                url, headers=headers, json=json_data, timeout=60, verify=False
+            )
+            resp.raise_for_status()
+            js = resp.json()
+            if "choices" not in js:
+                err = js.get("error", {}) if isinstance(js, dict) else {}
+                msg = err.get("message") or err.get("code") or str(js)[:200]
+                raise ValueError(msg)
+            return js
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+    raise last_error or Exception("Max retries exceeded")
 
 
 def generate_proposal_markdown(notice: Dict[str, Any]) -> str:
