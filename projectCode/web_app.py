@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 import json
 import os
+import io
 import threading
 import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, quote, unquote
 
 import requests
 from urllib3.exceptions import InsecureRequestWarning
@@ -13,10 +14,10 @@ from urllib3.exceptions import InsecureRequestWarning
 from ai_analyzer import ResearchAIAnalyzer
 from crawler_factory import ResearchCrawlerFactory
 from html_report_generator import generate_html_report
-from proposal_generator import generate_proposals_batch
+from proposal_generator import generate_full_proposal, generate_proposals_batch
 from rag_analyzer import analyze_materials_batch
+from knowledge_base_volc import KnowledgeBase
 from config import OUTPUT_DIR, RAG_RESULT_FILENAME, RESULT_FILENAME, WECHAT_WEBHOOK_URL
-from urllib.parse import parse_qs, urlparse, unquote
 
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 from config import (
@@ -29,6 +30,11 @@ from config import (
 
 JOBS = {}
 JOBS_LOCK = threading.Lock()
+KB_LOCK = threading.Lock()
+KB_INSTANCE = None
+NOTICE_LOCK = threading.Lock()
+NOTICE_INDEX = {}
+NOTICE_LIST = []
 
 
 def _now_str() -> str:
@@ -119,13 +125,96 @@ def _parse_bool(v):
     return False
 
 
+def _get_kb() -> KnowledgeBase:
+    global KB_INSTANCE
+    with KB_LOCK:
+        if KB_INSTANCE is None:
+            kb_dir = os.path.join(OUTPUT_DIR, "kb")
+            KB_INSTANCE = KnowledgeBase(persist_dir=kb_dir)
+        return KB_INSTANCE
+
+
+def _make_notice_id(item: dict) -> str:
+    link = (item.get("链接") or "").strip()
+    title = (item.get("标题") or "").strip()
+    base = link or title
+    return str(abs(hash(base)))
+
+
+def _refresh_notices_from_disk() -> None:
+    candidates = [
+        os.path.join(OUTPUT_DIR, "analysis_results.json"),
+        os.path.join(OUTPUT_DIR, RESULT_FILENAME),
+        os.path.join(OUTPUT_DIR, "crawl_results.json"),
+    ]
+    data = None
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                break
+            except Exception:
+                data = None
+    if not isinstance(data, list):
+        return
+
+    idx = {}
+    lst = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        nid = _make_notice_id(item)
+        idx[nid] = item
+        lst.append(
+            {
+                "id": nid,
+                "title": item.get("标题", ""),
+                "site": item.get("网站", ""),
+                "date": item.get("发布日期", ""),
+            }
+        )
+    with NOTICE_LOCK:
+        NOTICE_INDEX.clear()
+        NOTICE_INDEX.update(idx)
+        NOTICE_LIST.clear()
+        NOTICE_LIST.extend(lst)
+
+
+def _md_to_docx_bytes(markdown_text: str) -> bytes:
+    from docx import Document
+
+    doc = Document()
+    lines = (markdown_text or "").replace("\r\n", "\n").split("\n")
+    for line in lines:
+        t = line.rstrip()
+        if not t.strip():
+            doc.add_paragraph("")
+            continue
+        if t.startswith("### "):
+            doc.add_heading(t[4:].strip(), level=3)
+            continue
+        if t.startswith("## "):
+            doc.add_heading(t[3:].strip(), level=2)
+            continue
+        if t.startswith("# "):
+            doc.add_heading(t[2:].strip(), level=1)
+            continue
+        if t.startswith("- "):
+            doc.add_paragraph(t[2:].strip(), style="List Bullet")
+            continue
+        doc.add_paragraph(t)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 def _run_pipeline(job_id: str, options: dict) -> None:
     with JOBS_LOCK:
         JOBS[job_id]["status"] = "running"
         JOBS[job_id]["options"] = options
 
     enable_ai = _parse_bool(options.get("enable_ai"))
-    enable_rag = _parse_bool(options.get("enable_rag"))
     enable_html = _parse_bool(options.get("enable_html"))
     enable_wechat_markdown = _parse_bool(
         options.get("enable_wechat_markdown", options.get("enable_wechat"))
@@ -145,7 +234,7 @@ def _run_pipeline(job_id: str, options: dict) -> None:
 
     _log(
         job_id,
-        f"开始执行：网站 {len(selected_sites)} 个，AI分析={enable_ai}，RAG={enable_rag}，HTML={enable_html}，企业微信摘要={enable_wechat_markdown}，企业微信文件={enable_wechat_file}",
+        f"开始执行：网站 {len(selected_sites)} 个，AI分析={enable_ai}，HTML={enable_html}，企业微信摘要={enable_wechat_markdown}，企业微信文件={enable_wechat_file}",
     )
     analyzer = ResearchAIAnalyzer() if enable_ai else None
 
@@ -192,7 +281,10 @@ def _run_pipeline(job_id: str, options: dict) -> None:
                 seen.add(key)
                 deduped.append(n)
             if len(deduped) != len(all_notices):
-                _log(job_id, f"去重：保留 {len(deduped)} 条（剔除 {len(all_notices) - len(deduped)} 条重复）")
+                _log(
+                    job_id,
+                    f"去重：保留 {len(deduped)} 条（剔除 {len(all_notices) - len(deduped)} 条重复）",
+                )
             all_notices = deduped
 
             for idx, notice in enumerate(all_notices, 1):
@@ -239,47 +331,31 @@ def _run_pipeline(job_id: str, options: dict) -> None:
         with open(crawl_path, "w", encoding="utf-8") as f:
             json.dump(all_results, f, ensure_ascii=False, indent=2)
         _log(job_id, f"爬取结果已保存：{crawl_path}")
+        _refresh_notices_from_disk()
 
         results_for_html = all_results
         rag_path = None
         html_path = None
         html_filename = None
-        materials_results = None
-        if enable_rag and all_results:
-            _log(job_id, "开始RAG材料提取")
+        materials_results = []
+        if enable_ai and all_results:
+            _log(job_id, "开始材料提取（基于AI分析结果）")
             materials_results = analyze_materials_batch(all_results)
             rag_path = os.path.join(PROJECT_ROOT, OUTPUT_DIR, RAG_RESULT_FILENAME)
             with open(rag_path, "w", encoding="utf-8") as f:
                 json.dump(materials_results, f, ensure_ascii=False, indent=2)
-            _log(job_id, f"RAG结果已保存:{rag_path}")
-            if materials_results:
-                results_for_html = materials_results
-            else:
-                results_for_html = all_results  # 回退到原始爬取结果
+            _log(job_id, f"材料提取结果已保存:{rag_path}")
 
         if enable_proposal and all_results:
             proposals_dir = os.path.join(OUTPUT_DIR, "proposals")
-            if enable_rag and materials_results:
-                _log(job_id, "开始生成申报建议书（优先使用RAG结果）")
+            if enable_ai and materials_results:
+                _log(job_id, "开始生成申报建议书（基于材料提取结果）")
                 count = generate_proposals_batch(
                     materials_results, output_dir=proposals_dir
                 )
-                if count <= 0:
-                    _log(job_id, "RAG建议书生成数量为0，回退为基于原始爬取结果生成")
-                    from proposal_generator import generate_proposals_from_raw
-
-                    count = generate_proposals_from_raw(
-                        all_results, output_dir=proposals_dir
-                    )
                 _log(job_id, f"建议书生成完成：{count} 份，目录：{proposals_dir}")
             else:
-                _log(job_id, "开始生成申报建议书（基于原始爬取结果）")
-                from proposal_generator import generate_proposals_from_raw
-
-                count = generate_proposals_from_raw(
-                    all_results, output_dir=proposals_dir
-                )
-                _log(job_id, f"建议书生成完成：{count} 份，目录：{proposals_dir}")
+                _log(job_id, "建议书生成已跳过：需先启用AI分析并产生材料提取结果")
 
         if enable_html:
             # 决定用于显示的数据源：如果启用了AI分析，优先使用 all_results（含分析结果）
@@ -343,6 +419,46 @@ def _run_pipeline(job_id: str, options: dict) -> None:
             JOBS[job_id]["error"] = str(e)
 
 
+def _run_generate_proposal(
+    job_id: str, notice_id: str, top_k: int, save_to_kb: bool
+) -> None:
+    with JOBS_LOCK:
+        JOBS[job_id]["status"] = "running"
+
+    try:
+        _log(job_id, "开始生成完整申报书（RAG知识库）")
+        _refresh_notices_from_disk()
+        with NOTICE_LOCK:
+            notice = NOTICE_INDEX.get(notice_id)
+        if not notice:
+            raise ValueError("未找到通知，请先执行爬取生成通知列表")
+
+        kb = _get_kb()
+        if kb.is_empty():
+            raise ValueError("知识库为空，请先上传历史申报书")
+
+        md = generate_full_proposal(notice, kb, top_k=top_k)
+        if save_to_kb and md and not md.strip().startswith("⚠️"):
+            kb.add_text(
+                text=md,
+                source_name=f"generated_{notice_id}.md",
+                metadata={"type": "generated", "notice_id": notice_id},
+            )
+            _log(job_id, "已将生成的申报书写入知识库")
+
+        with JOBS_LOCK:
+            JOBS[job_id]["status"] = "done"
+            JOBS[job_id]["outputs"] = {
+                "proposal_md": md,
+                "notice_title": notice.get("标题", ""),
+            }
+    except Exception as e:
+        _log(job_id, f"生成失败：{str(e)}")
+        with JOBS_LOCK:
+            JOBS[job_id]["status"] = "error"
+            JOBS[job_id]["error"] = str(e)
+
+
 def _html_page() -> str:
     sites = ResearchCrawlerFactory.get_all_sites()
     site_items = []
@@ -397,11 +513,10 @@ def _html_page() -> str:
           </div>
           <div style="font-weight:700;margin:14px 0 10px;">选项</div>
           <div class="checks">
-            <label><input id="enable_ai" type="checkbox"> AI分析</label>
-            <label><input id="enable_rag" type="checkbox" checked> RAG提取</label>
+            <label><input id="enable_ai" type="checkbox" checked> AI分析</label>
             <label><input id="enable_html" type="checkbox" checked> 生成HTML</label>
             <label><input id="enable_wechat_markdown" type="checkbox"> 推送摘要</label>
-            <label><input id="enable_wechat_file" type="checkbox"> 推送HTML文件</label>
+            <label><input id="enable_wechat_file" type="checkbox" checked> 推送HTML文件</label>
             <label><input id="enable_proposal" type="checkbox" checked> 生成建议书</label>
           </div>
         </div>
@@ -414,6 +529,36 @@ def _html_page() -> str:
             <button class="ghost" type="button" onclick="selectAll(true)">全选</button>
             <button class="ghost" type="button" onclick="selectAll(false)">全不选</button>
           </div>
+        </div>
+      </div>
+      <div class="content" style="grid-template-columns: 1fr; padding-top: 0;">
+        <div class="box">
+          <div style="font-weight:700;margin-bottom:10px;">📚 历史申报书知识库</div>
+          <div class="row" style="margin-bottom:10px;">
+            <input id="kb_files" type="file" multiple accept=".docx,.md,.txt,.pdf">
+            <button class="ghost" type="button" onclick="uploadKbFiles()">上传并建立知识库</button>
+            <span class="muted" id="kb_status"></span>
+          </div>
+          <div class="muted">支持 .docx/.md/.txt/.pdf（单个≤100MB），向量库持久化在 data/kb</div>
+        </div>
+        <div class="box">
+          <div style="font-weight:700;margin-bottom:10px;">✍️ 一键生成申报书</div>
+          <div class="row" style="margin-bottom:10px;">
+            <label>选择通知
+              <select id="notice_select" style="padding:8px 10px;border:1px solid #dfe3ee;border-radius:8px;min-width:520px;"></select>
+            </label>
+            <label>TopK
+              <input id="kb_topk" type="number" min="1" max="20" value="5" style="width:80px;padding:8px 10px;border:1px solid #dfe3ee;border-radius:8px;">
+            </label>
+            <label><input id="kb_save_back" type="checkbox"> 写入知识库</label>
+            <button class="primary" type="button" onclick="startGenerateProposal()">智能生成申报书</button>
+          </div>
+          <div class="row" style="margin-bottom:10px;">
+            <button class="ghost" type="button" onclick="downloadProposal('md')" id="btn_dl_md" disabled>下载MD</button>
+            <button class="ghost" type="button" onclick="downloadProposal('docx')" id="btn_dl_docx" disabled>下载DOCX</button>
+            <span class="muted" id="proposal_status"></span>
+          </div>
+          <div id="proposal_preview" style="border:1px solid #eef0f6;border-radius:10px;padding:12px;min-height:120px;background:#fbfcff;"></div>
         </div>
       </div>
       <div class="actions">
@@ -452,7 +597,6 @@ def _html_page() -> str:
         end_date: document.getElementById('end_date').value,
         sites,
         enable_ai: document.getElementById('enable_ai').checked,
-        enable_rag: document.getElementById('enable_rag').checked,
         enable_html: document.getElementById('enable_html').checked,
         enable_wechat_markdown: document.getElementById('enable_wechat_markdown').checked,
         enable_wechat_file: document.getElementById('enable_wechat_file').checked,
@@ -496,6 +640,127 @@ def _html_page() -> str:
         setTimeout(pollStatus, 2000);
       }}
     }}
+
+    let proposalJobId = null;
+    let lastProposalJobId = null;
+
+    function escapeHtml(s) {{
+      return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }}
+
+    function renderMarkdown(md) {{
+      const lines = (md || '').replace(/\\r\\n/g,'\\n').split('\\n');
+      const out = [];
+      for (const line of lines) {{
+        if (line.startsWith('### ')) {{
+          out.push('<h3>' + escapeHtml(line.slice(4)) + '</h3>');
+        }} else if (line.startsWith('## ')) {{
+          out.push('<h2>' + escapeHtml(line.slice(3)) + '</h2>');
+        }} else if (line.startsWith('# ')) {{
+          out.push('<h1>' + escapeHtml(line.slice(2)) + '</h1>');
+        }} else if (line.startsWith('- ')) {{
+          out.push('<div style="padding-left:18px">• ' + escapeHtml(line.slice(2)) + '</div>');
+        }} else {{
+          out.push('<div>' + escapeHtml(line) + '</div>');
+        }}
+      }}
+      return out.join('');
+    }}
+
+    async function refreshNotices() {{
+      const sel = document.getElementById('notice_select');
+      if (!sel) return;
+      sel.innerHTML = '<option value="">（加载中...）</option>';
+      try {{
+        const resp = await fetch('/api/notices');
+        const data = await resp.json();
+        const items = data.items || [];
+        if (!items.length) {{
+          sel.innerHTML = '<option value="">（暂无通知，请先执行爬取）</option>';
+          return;
+        }}
+        sel.innerHTML = items.map(x => {{
+          const t = (x.title || '').slice(0, 80);
+          const d = x.date || '';
+          const s = x.site || '';
+          return `<option value="${{x.id}}">${{t}} | ${{s}} | ${{d}}</option>`;
+        }}).join('');
+      }} catch (e) {{
+        sel.innerHTML = '<option value="">（加载失败）</option>';
+      }}
+    }}
+
+    async function uploadKbFiles() {{
+      const el = document.getElementById('kb_files');
+      const st = document.getElementById('kb_status');
+      if (!el || !el.files || el.files.length === 0) {{
+        if (st) st.textContent = '请选择文件';
+        return;
+      }}
+      if (st) st.textContent = '上传中...';
+      const fd = new FormData();
+      for (const f of el.files) fd.append('files', f, f.name);
+      const resp = await fetch('/api/upload_proposal', {{ method: 'POST', body: fd }});
+      const data = await resp.json();
+      if (st) st.textContent = data.message || '完成';
+    }}
+
+    async function startGenerateProposal() {{
+      const sel = document.getElementById('notice_select');
+      const st = document.getElementById('proposal_status');
+      if (!sel || !sel.value) {{
+        if (st) st.textContent = '请选择通知';
+        return;
+      }}
+      const topk = parseInt(document.getElementById('kb_topk').value || '5', 10);
+      const saveBack = document.getElementById('kb_save_back').checked;
+      document.getElementById('proposal_preview').innerHTML = '';
+      document.getElementById('btn_dl_md').disabled = true;
+      document.getElementById('btn_dl_docx').disabled = true;
+      if (st) st.textContent = '生成中...';
+
+      const resp = await fetch('/api/generate_proposal', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ notice_id: sel.value, top_k: topk, save_to_kb: saveBack }})
+      }});
+      const data = await resp.json();
+      proposalJobId = data.job_id;
+      lastProposalJobId = proposalJobId;
+      pollProposal();
+    }}
+
+    async function pollProposal() {{
+      if (!proposalJobId) return;
+      const st = document.getElementById('proposal_status');
+      const resp = await fetch('/api/status?id=' + encodeURIComponent(proposalJobId));
+      const data = await resp.json();
+      if (data.status === 'running') {{
+        if (st) st.textContent = '生成中...';
+        setTimeout(pollProposal, 1200);
+        return;
+      }}
+      if (data.status === 'error') {{
+        if (st) st.textContent = '生成失败：' + (data.error || '');
+        return;
+      }}
+      const md = data.outputs && data.outputs.proposal_md ? data.outputs.proposal_md : '';
+      if (st) st.textContent = '完成';
+      document.getElementById('proposal_preview').innerHTML = renderMarkdown(md);
+      document.getElementById('btn_dl_md').disabled = !md;
+      document.getElementById('btn_dl_docx').disabled = !md;
+    }}
+
+    function downloadProposal(fmt) {{
+      const id = lastProposalJobId;
+      if (!id) return;
+      const url = '/api/download_proposal?id=' + encodeURIComponent(id) + '&format=' + encodeURIComponent(fmt);
+      window.open(url, '_blank');
+    }}
+
+    window.addEventListener('load', () => {{
+      refreshNotices();
+    }});
   </script>
 </body>
 </html>"""
@@ -531,14 +796,12 @@ def _safe_report_path(filename: str) -> str | None:
         return None
     if not filename.startswith("政策爬取日报_"):
         return None
-    # 先在 data 目录下查找（OUTPUT_DIR 已是绝对路径）
     data_dir = OUTPUT_DIR
     full = os.path.abspath(os.path.join(data_dir, filename))
     if not full.startswith(os.path.abspath(data_dir) + os.sep):
         return None
     if os.path.exists(full):
         return full
-    # 兼容旧版：再在根目录下查找
     full_root = os.path.abspath(os.path.join(PROJECT_ROOT, filename))
     if full_root.startswith(os.path.abspath(PROJECT_ROOT) + os.sep) and os.path.exists(
         full_root
@@ -552,6 +815,11 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             return _text_response(self, 200, _html_page())
+        if parsed.path == "/api/notices":
+            _refresh_notices_from_disk()
+            with NOTICE_LOCK:
+                items = list(NOTICE_LIST)
+            return _json_response(self, 200, {"items": items})
         if parsed.path == "/api/status":
             q = parse_qs(parsed.query)
             job_id = (q.get("id") or [""])[0]
@@ -569,6 +837,62 @@ class Handler(BaseHTTPRequestHandler):
                         "error": job.get("error", ""),
                     },
                 )
+        if parsed.path == "/api/download_proposal":
+            q = parse_qs(parsed.query)
+            job_id = (q.get("id") or [""])[0]
+            fmt = (q.get("format") or ["md"])[0].lower()
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
+                outputs = (job or {}).get("outputs") or {}
+            md = outputs.get("proposal_md") or ""
+            title = outputs.get("notice_title") or "proposal"
+            safe_name = (
+                "".join(
+                    c for c in str(title) if c.isalnum() or c in (" ", "-", "_")
+                ).strip()[:50]
+                or "proposal"
+            )
+            if not md:
+                return _text_response(
+                    self, 404, "not found", "text/plain; charset=utf-8"
+                )
+            if fmt == "docx":
+                try:
+                    data = _md_to_docx_bytes(md)
+                except Exception as e:
+                    return _text_response(
+                        self, 500, str(e), "text/plain; charset=utf-8"
+                    )
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+                safe_file_name = f"{safe_name}.docx"
+                safe_file_name_quoted = quote(safe_file_name)
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename*=UTF-8''{safe_file_name_quoted}",
+                )
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            # 默认 md 格式
+            data = md.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/markdown; charset=utf-8")
+            safe_file_name_md = f"{safe_name}.md"
+            safe_file_name_md_quoted = quote(safe_file_name_md)
+            self.send_header(
+                "Content-Disposition",
+                f"attachment; filename*=UTF-8''{safe_file_name_md_quoted}",
+            )
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         if parsed.path.startswith("/files/proposals/"):
             raw_filename = parsed.path[len("/files/proposals/") :]
             filename = unquote(raw_filename)
@@ -590,9 +914,7 @@ class Handler(BaseHTTPRequestHandler):
             return _text_response(self, 404, "not found", "text/plain; charset=utf-8")
         if parsed.path.startswith("/files/"):
             raw_filename = parsed.path[len("/files/") :]
-            # 解码 URL 编码的文件名
-            filename = unquote(raw_filename)  # 关键：解码
-            # 直接使用 OUTPUT_DIR 绝对路径拼接
+            filename = unquote(raw_filename)
             file_path = os.path.join(OUTPUT_DIR, filename)
             if os.path.exists(file_path):
                 with open(file_path, "rb") as f:
@@ -604,7 +926,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 return
             else:
-                # 可选：兼容根目录下的旧文件
                 file_path_root = os.path.join(PROJECT_ROOT, filename)
                 if os.path.exists(file_path_root):
                     with open(file_path_root, "rb") as f:
@@ -621,12 +942,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/proposal/"):
             raw_filename = parsed.path[len("/proposal/") :]
             filename = unquote(raw_filename)
-            # 安全检查
             if not filename.endswith(".md"):
                 return _text_response(
                     self, 404, "not found", "text/plain; charset=utf-8"
                 )
-            # 建议书保存在 data/proposals/ 目录下
             proposals_dir = os.path.join(OUTPUT_DIR, "proposals")
             file_path = os.path.join(proposals_dir, filename)
             if os.path.exists(file_path):
@@ -658,6 +977,98 @@ class Handler(BaseHTTPRequestHandler):
             _log(job_id, "任务已创建")
             t = threading.Thread(
                 target=_run_pipeline, args=(job_id, options), daemon=True
+            )
+            t.start()
+            return _json_response(self, 200, {"job_id": job_id})
+        if parsed.path == "/api/upload_proposal":
+            try:
+                content_type = self.headers.get("Content-Type", "")
+                if "multipart/form-data" not in content_type:
+                    return _json_response(
+                        self, 400, {"message": "invalid content-type"}
+                    )
+
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length)
+
+                from email.parser import BytesParser
+                from email import policy
+
+                fake_headers = f"Content-Type: {content_type}\n\n".encode("utf-8")
+                full_data = fake_headers + body
+                msg = BytesParser(policy=policy.default).parsebytes(full_data)
+
+                files_data = []
+                for part in msg.iter_parts():
+                    if part.get_content_disposition() == "form-data":
+                        name = part.get_param("name", header="Content-Disposition")
+                        if name == "files" and part.get_filename():
+                            filename = part.get_filename()
+                            file_bytes = part.get_payload(decode=True)
+                            files_data.append((filename, file_bytes))
+
+                if not files_data:
+                    return _json_response(self, 400, {"message": "no files"})
+
+                kb = _get_kb()
+                upload_dir = os.path.join(OUTPUT_DIR, "kb", "uploads")
+                os.makedirs(upload_dir, exist_ok=True)
+
+                ok_files = 0
+                total_chunks = 0
+                for filename, data in files_data:
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext not in (".docx", ".md", ".txt", ".pdf"):
+                        continue
+                    if len(data) > 100 * 1024 * 1024:
+                        continue
+                    save_name = f"{uuid.uuid4().hex}_{filename}"
+                    save_path = os.path.join(upload_dir, save_name)
+                    with open(save_path, "wb") as f:
+                        f.write(data)
+                    chunks = kb.add_file(save_path, original_name=filename)
+                    ok_files += 1
+                    total_chunks += int(chunks or 0)
+
+                return _json_response(
+                    self,
+                    200,
+                    {
+                        "message": f"上传完成：{ok_files} 个文件，入库切片 {total_chunks} 条",
+                        "files": ok_files,
+                        "chunks": total_chunks,
+                    },
+                )
+            except Exception as e:
+                import traceback
+
+                traceback.print_exc()
+                return _json_response(self, 500, {"message": str(e)})
+        if parsed.path == "/api/generate_proposal":
+            length = int(self.headers.get("Content-Length") or "0")
+            body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                payload = json.loads(body.decode("utf-8"))
+            except Exception:
+                payload = {}
+            notice_id = str(payload.get("notice_id") or "").strip()
+            top_k = int(payload.get("top_k") or 5)
+            save_to_kb = _parse_bool(payload.get("save_to_kb"))
+            if not notice_id:
+                return _json_response(self, 400, {"message": "missing notice_id"})
+            job_id = uuid.uuid4().hex
+            with JOBS_LOCK:
+                JOBS[job_id] = {
+                    "status": "queued",
+                    "logs": [],
+                    "outputs": {},
+                    "kind": "proposal",
+                }
+            _log(job_id, "任务已创建")
+            t = threading.Thread(
+                target=_run_generate_proposal,
+                args=(job_id, notice_id, top_k, save_to_kb),
+                daemon=True,
             )
             t.start()
             return _json_response(self, 200, {"job_id": job_id})

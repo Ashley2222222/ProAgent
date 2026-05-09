@@ -122,9 +122,7 @@ def send_wechat_file(media_id: str, webhook_url: str) -> bool:
 # 导入配置
 from config import (
     ENABLE_AI_ANALYSIS,
-    ENABLE_RAG_ANALYSIS,
     ENABLE_AUTO_PROPOSAL,
-    AI_ONLY_ANALYZE_VALID,
     LIMIT_NOTICES_PER_SITE,
     MAX_NOTICES_PER_SITE,
     DATE_RANGE,
@@ -294,42 +292,25 @@ def main():
             print(f"  📝 正文预览: {content[:200]}...")
 
             if ENABLE_AI_ANALYSIS:
-                # 只对符合要求的通知进行AI分析（受 AI_ONLY_ANALYZE_VALID 控制）
-                if AI_ONLY_ANALYZE_VALID and not crawler.should_include_notice(
-                    notice["标题"]
-                ):
-                    print("  ⏭️  跳过AI分析（非申报类通知）")
-                    result = {
-                        "网站": crawler.get_site_name(),
-                        "标题": notice["标题"],
-                        "发布日期": notice.get("发布日期"),
-                        "链接": notice["链接"],
-                        "正文长度": len(content),
-                        "正文预览": content[:500],
-                    }
-                else:
-                    # AI分析模式
-                    print(f"  🤖 AI分析中...")
-                    ai_result = analyzer.analyze_notice(notice["标题"], content)
+                print(f"  🤖 AI分析中...")
+                ai_result = analyzer.analyze_notice(notice["标题"], content)
 
-                    # 输出结果
-                    print(f"  ✅ AI分析完成:")
-                    for k, v in ai_result.items():
-                        try:
-                            print(f"     {k}: {v}")
-                        except:
-                            print(f"     {k}: {str(v)[:100]}...")
+                print(f"  ✅ AI分析完成:")
+                for k, v in ai_result.items():
+                    try:
+                        print(f"     {k}: {v}")
+                    except Exception:
+                        print(f"     {k}: {str(v)[:100]}...")
 
-                    # 保存结果
-                    result = {
-                        "网站": crawler.get_site_name(),
-                        "标题": notice["标题"],
-                        "发布日期": notice.get("发布日期"),
-                        "链接": notice["链接"],
-                        "正文长度": len(content),
-                        "正文预览": content[:500],
-                        "分析结果": ai_result,
-                    }
+                result = {
+                    "网站": crawler.get_site_name(),
+                    "标题": notice["标题"],
+                    "发布日期": notice.get("发布日期"),
+                    "链接": notice["链接"],
+                    "正文长度": len(content),
+                    "正文预览": content[:30000],
+                    "分析结果": ai_result,
+                }
             else:
                 # 仅爬取模式
                 print(f"  ✅ 爬取完成（AI分析已跳过）")
@@ -339,7 +320,7 @@ def main():
                     "发布日期": notice.get("发布日期"),
                     "链接": notice["链接"],
                     "正文长度": len(content),
-                    "正文预览": content[:500],
+                    "正文预览": content[:30000],
                 }
 
             filtered_results.append(result)
@@ -380,9 +361,10 @@ def main():
     except Exception as e:
         print(f"\n⚠️  保存结果失败: {str(e)}")
 
-    # RAG材料提取
-    if ENABLE_RAG_ANALYSIS and all_results:
-        print("\n🧩 正在进行RAG材料提取...")
+    # 材料提取（基于AI分析结果的轻量映射）
+    materials_results = []
+    if ENABLE_AI_ANALYSIS and all_results:
+        print("\n🧩 正在进行材料提取（基于AI分析结果）...")
         materials_results = analyze_materials_batch(all_results)
         try:
             os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -408,37 +390,9 @@ def main():
             except Exception as e:
                 print(f"⚠️  生成建议书失败: {str(e)}")
 
-            print(
-                "\n📝 正在为所有通知生成《项目申报建议书》（基于原始爬取内容） 测试用..."
-            )
-            try:
-                from proposal_generator import generate_proposals_from_raw
-
-                count = generate_proposals_from_raw(
-                    all_results, output_dir=os.path.join(OUTPUT_DIR, "proposals")
-                )
-                print(f"✅ 共生成 {count} 份建议书")
-            except Exception as e:
-                print(f"⚠️  生成建议书失败: {str(e)}")
-
     # 生成HTML日报
     html_filename = None
-    # 如果启用了AI分析，日报应该使用包含分析结果的原始数据
-    if ENABLE_AI_ANALYSIS:
-        results_for_html = all_results
-    else:
-        # 否则优先使用RAG结果（如果存在且非空）
-        results_for_html = None
-        if ENABLE_RAG_ANALYSIS and all_results:
-            try:
-                rag_path = os.path.join(OUTPUT_DIR, RAG_RESULT_FILENAME)
-                if os.path.exists(rag_path):
-                    with open(rag_path, "r", encoding="utf-8") as f:
-                        results_for_html = json.load(f)
-            except Exception:
-                results_for_html = None
-        if results_for_html is None or len(results_for_html) == 0:
-            results_for_html = all_results
+    results_for_html = all_results
 
     if results_for_html:
         print("\n📄 正在生成HTML日报...")

@@ -9,6 +9,11 @@ import os
 from dotenv import load_dotenv
 import requests
 from config import AI_MODEL
+from rag_analyzer import (
+    APPLICATION_KEYWORDS,
+    MATERIAL_KEYWORDS,
+    _select_relevant_by,
+)
 
 # 加载环境变量
 load_dotenv()
@@ -31,7 +36,10 @@ class ResearchAIAnalyzer:
         if not self.api_key:
             return self._get_error_result("未读取到API Key，请检查.env文件")
 
-        prompt = self._build_prompt(title, content)
+        ctx = _select_relevant_by(
+            content or "", APPLICATION_KEYWORDS + MATERIAL_KEYWORDS, max_chars=4000
+        )
+        prompt = self._build_prompt(title, ctx)
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -54,8 +62,10 @@ class ResearchAIAnalyzer:
 
                 result = resp.json()
                 if "choices" in result:
-                    return self._parse_ai_response(
+                    return self._normalize_result(
+                        self._parse_ai_response(
                         result["choices"][0]["message"]["content"]
+                    )
                     )
                 else:
                     return self._get_error_result(
@@ -81,7 +91,7 @@ class ResearchAIAnalyzer:
             except Exception as e:
                 return self._get_error_result(f"未知异常：{str(e)[:100]}")
 
-    def _build_prompt(self, title: str, content: str) -> str:
+    def _build_prompt(self, title: str, context: str) -> str:
         """构建AI提示词"""
         return f"""
 你是科研课题申报专家，仅输出JSON格式内容，不添加任何额外解释、文字、符号或代码块。
@@ -96,11 +106,19 @@ class ResearchAIAnalyzer:
     "申报流程": "申报步骤、材料清单、提交方式",
     "联系方式": "提取所有联系电话、电子邮箱、联系人、地址等信息",
     "分析结论": "判断是否符合课题申报，给出简要分析",
-    "风险提示": "提醒潜在风险和注意事项"
+    "风险提示": "提醒潜在风险和注意事项",
+    "是否课题申报相关": true/false,
+    "申报方向": ["方向1", "方向2"],
+    "材料清单": ["材料1", "材料2"],
+    "提交方式": "线上/纸质/两者及送达方式",
+    "提交渠道": "系统名称/邮箱/地址等",
+    "份数与格式要求": "份数、纸质/电子及格式要求",
+    "模板或表格下载": "是否提供下载及描述",
+    "其他要求": "其他与申报/材料相关注意事项"
 }}
 
 通知标题：{title}
-通知内容：{content[:4000]}
+相关段落：{context[:4000]}
 """
 
     def _parse_ai_response(self, ai_text: str) -> dict:
@@ -129,6 +147,14 @@ class ResearchAIAnalyzer:
                 "申报流程": "未明确",
                 "联系方式": "未明确",
                 "风险提示": "未明确",
+                "是否课题申报相关": False,
+                "申报方向": [],
+                "材料清单": [],
+                "提交方式": "未明确",
+                "提交渠道": "未明确",
+                "份数与格式要求": "未明确",
+                "模板或表格下载": "未明确",
+                "其他要求": "未明确",
             }
 
     def _get_error_result(self, error_msg: str) -> dict:
@@ -145,4 +171,59 @@ class ResearchAIAnalyzer:
             "申报流程": "未明确",
             "联系方式": "未明确",
             "风险提示": "未明确",
+            "是否课题申报相关": False,
+            "申报方向": [],
+            "材料清单": [],
+            "提交方式": "未明确",
+            "提交渠道": "未明确",
+            "份数与格式要求": "未明确",
+            "模板或表格下载": "未明确",
+            "其他要求": "未明确",
         }
+
+    def _normalize_result(self, result: dict) -> dict:
+        if not isinstance(result, dict):
+            return self._get_error_result("AI返回非JSON对象")
+
+        defaults = {
+            "项目名称": "未明确",
+            "申报截止时间": "未明确",
+            "申报主体": "未明确",
+            "资助类型": "未明确",
+            "核心申报条件": "未明确",
+            "征集内容": "未明确",
+            "申报流程": "未明确",
+            "联系方式": "未明确",
+            "分析结论": "未明确",
+            "风险提示": "未明确",
+            "是否课题申报相关": False,
+            "申报方向": [],
+            "材料清单": [],
+            "提交方式": "未明确",
+            "提交渠道": "未明确",
+            "份数与格式要求": "未明确",
+            "模板或表格下载": "未明确",
+            "其他要求": "未明确",
+        }
+        merged = {**defaults, **result}
+
+        v = merged.get("是否课题申报相关")
+        if isinstance(v, str):
+            merged["是否课题申报相关"] = v.strip().lower() in ("true", "1", "yes", "y", "是")
+        else:
+            merged["是否课题申报相关"] = bool(v)
+
+        for k in ("申报方向", "材料清单"):
+            vv = merged.get(k)
+            if isinstance(vv, str):
+                s = vv.strip()
+                if not s or s == "未明确":
+                    merged[k] = []
+                else:
+                    merged[k] = [s]
+            elif isinstance(vv, list):
+                merged[k] = [x for x in vv if isinstance(x, str) and x.strip() and x.strip() != "未明确"]
+            else:
+                merged[k] = []
+
+        return merged
