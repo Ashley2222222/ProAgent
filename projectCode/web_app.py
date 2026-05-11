@@ -531,6 +531,14 @@ def _html_page() -> str:
           </div>
         </div>
       </div>
+      <div class="actions">
+        <button class="primary" onclick="runJob()">开始执行</button>
+        <button class="ghost" onclick="clearLog()">清空日志</button>
+        <div id="result_links" style="align-self:center;"></div>
+      </div>
+      <div style="padding: 0 20px 18px 20px;">
+        <div class="log" id="log"></div>
+      </div>
       <div class="content" style="grid-template-columns: 1fr; padding-top: 0;">
         <div class="box">
           <div style="font-weight:700;margin-bottom:10px;">📚 历史申报书知识库</div>
@@ -561,14 +569,7 @@ def _html_page() -> str:
           <div id="proposal_preview" style="border:1px solid #eef0f6;border-radius:10px;padding:12px;min-height:120px;background:#fbfcff;"></div>
         </div>
       </div>
-      <div class="actions">
-        <button class="primary" onclick="runJob()">开始执行</button>
-        <button class="ghost" onclick="clearLog()">清空日志</button>
-        <div id="result_links" style="align-self:center;"></div>
-      </div>
-      <div style="padding: 0 20px 18px 20px;">
-        <div class="log" id="log"></div>
-      </div>
+      
       <div class="footer">
         <div class="muted">提示：执行期间可保持页面打开，日志会实时刷新。</div>
         <div class="muted">服务端仅在本机运行：建议用于内网/本机环境。</div>
